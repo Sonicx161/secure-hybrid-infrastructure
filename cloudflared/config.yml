@@ -1,0 +1,21 @@
+tunnel: <UUID_PLACEHOLDER>
+credentials-file: /etc/cloudflared/cert.json
+
+ingress:
+  # --- PRIORITY 1: Public Bypass (Latency Sensitive) ---
+  # Direct routing for streaming services to bypass IdP authentication overhead
+  # and allow API access for headless clients (e.g., TorBox, Stremio).
+  - hostname: stream.example.com
+    service: http://aiostreams:3000
+
+  - hostname: comet.example.com
+    service: http://comet:8001
+
+  # --- PRIORITY 2: Admin Services (Zero Trust Secured) ---
+  # Routes all other subdomains to Traefik.
+  # Protected by Cloudflare Access (SSO/MFA) at the Edge.
+  - hostname: "*.example.com"
+    service: http://traefik:80
+
+  # --- Catch-All ---
+  - service: http_status:404
