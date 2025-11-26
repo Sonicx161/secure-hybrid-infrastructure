@@ -1,0 +1,28 @@
+api:
+  dashboard: true
+  insecure: true
+
+entryPoints:
+  # HTTP EntryPoint (Port 80)
+  # Receives traffic from Cloudflare Tunnel (Edge SSL termination)
+  http:
+    address: ":80"
+
+  # HTTPS EntryPoint (Port 443)
+  # Reserved for future internal SSL requirements
+  https:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: proxy
+  file:
+    # Watch for dynamic configuration changes
+    filename: /config.yml
+    watch: true
+
+log:
+  level: INFO
+accessLog: {}
