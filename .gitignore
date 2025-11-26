@@ -1,0 +1,25 @@
+# Environment Variables (Secrets)
+.env
+*.env
+
+# Traefik Certificates & Data
+acme.json
+*.pem
+*.crt
+*.key
+
+# Application Data & databases
+/data
+/config
+/db
+*.db
+*.sqlite
+*.log
+
+# Cloudflare Credentials
+*.json
+cloudflared/cert.pem
+
+# OS Files
+.DS_Store
+Thumbs.db
