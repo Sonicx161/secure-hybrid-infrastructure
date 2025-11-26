@@ -45,14 +45,17 @@ The infrastructure follows a **Service-Oriented Architecture (SOA)**, deployed v
 
 ### The "Loop" Issue
 **Problem:** Combining Cloudflare's Flexible SSL with Traefik's internal HTTPS redirection caused infinite redirect loops.
+
 **Solution:** Implemented strict origin rules where Cloudflare handles Edge SSL, communicating with the Traefik tunnel over HTTP/1.1, while Traefik manages internal routing without forcing redundant redirects.
 
 ### Hybrid Access Policies
 **Problem:** Admin dashboards need strict security, but media clients (TVs) cannot perform 2FA.
+
 **Solution:** Configured Cloudflare Access policies to enforce "Admin Access" (SSO) for root domains while creating specific "Bypass" rules for API subdomains used by headless clients, secured via API keys.
 
 ### Database Orchestration
 **Problem:** Multiple services (Riven, Bitmagnet, Authentik) required Postgres.
+
 **Solution:** Deployed a central Postgres 16 instance with initialization scripts to manage distinct databases and users for each microservice, reducing resource overhead compared to isolated DB instances.
 
 ## 🛠 Tech Stack
