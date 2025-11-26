@@ -64,5 +64,10 @@ The infrastructure follows a **Service-Oriented Architecture (SOA)**, deployed v
 *   **Scripting:** Bash (Automation), Python
 *   **Databases:** PostgreSQL, Redis, SQLite
 
+## 🔮 Future Roadmap
+*   **Observability:** Implement Prometheus & Grafana for real-time container metrics.
+*   **High Availability:** Migrate critical services to a Kubernetes (k3s) cluster.
+*   **Backup Strategy:** Implement automated off-site backups using Restic/Borg to S3-compatible storage.
+
 ---
 *Note: This repository contains sanitized configuration files. Secrets and sensitive environment variables have been replaced with placeholders.*
