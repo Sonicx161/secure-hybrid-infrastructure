@@ -1,0 +1,443 @@
+version: "3.9"
+
+# ==========================================
+# NETWORK INFRASTRUCTURE
+# ==========================================
+networks:
+  proxy:
+    name: proxy
+    external: true
+  internal:
+    driver: bridge
+
+# ==========================================
+# STACK 1: EDGE & IDENTITY
+# ==========================================
+services:
+  # REVERSE PROXY (Gateway)
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080" # Dashboard
+    environment:
+      - TZ=${TIMEZONE}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config/traefik:/etc/traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAINNAME}`)"
+      - "traefik.http.routers.traefik.service=api@internal"
+
+  # SECURE TUNNEL (Ingress)
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    network_mode: host
+    command: tunnel --config /etc/cloudflared/config.yml run
+    volumes:
+      - ./config/cloudflared:/etc/cloudflared:ro
+
+  # AUTHENTICATION (IdP)
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2024.4.2
+    container_name: authentik_server
+    restart: unless-stopped
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+    volumes:
+      - ./config/authentik/media:/media
+      - ./config/authentik/templates:/templates
+    ports:
+      - "9000:9000"
+      - "9443:9443"
+    depends_on:
+      - postgresql
+      - redis
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2024.4.2
+    command: worker
+    restart: unless-stopped
+    environment:
+      AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY}
+      AUTHENTIK_REDIS__HOST: redis
+      AUTHENTIK_POSTGRESQL__HOST: postgresql
+    user: root
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - postgresql
+      - redis
+
+# ==========================================
+# STACK 2: MANAGEMENT & DASHBOARDS
+# ==========================================
+  # DOCKER ORCHESTRATION UI
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: portainer
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer_data:/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAINNAME}`)"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+
+  # MAIN DASHBOARD
+  homarr:
+    image: ghcr.io/homarr-labs/homarr:latest
+    container_name: homarr
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/homarr:/appdata
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homarr.rule=Host(`homarr.${DOMAINNAME}`)"
+      - "traefik.http.services.homarr.loadbalancer.server.port=7575"
+
+  # RSS AGGREGATOR
+  freshrss:
+    image: freshrss/freshrss:latest
+    container_name: freshrss
+    restart: unless-stopped
+    volumes:
+      - ./config/freshrss:/var/www/FreshRSS/data
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.freshrss.rule=Host(`rss.${DOMAINNAME}`)"
+      - "traefik.http.services.freshrss.loadbalancer.server.port=80"
+
+# ==========================================
+# STACK 3: CLOUD STORAGE & UTILITIES
+# ==========================================
+  # SELF-HOSTED CLOUD STORAGE
+  nextcloud:
+    image: lscr.io/linuxserver/nextcloud:latest
+    container_name: nextcloud
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./config/nextcloud:/config
+      - ${MEDIA_PATH}/nextcloud-data:/data
+    ports:
+      - 84:80
+    restart: unless-stopped
+
+  # IOS SIDELOADING SERVER
+  altserver:
+    image: dreth/altserver-docker:latest
+    container_name: altserver
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    volumes:
+      - ./config/altserver:/altserver/data
+      - /var/run:/var/run
+
+# ==========================================
+# STACK 4: CONTENT AGGREGATION (ARR STACK)
+# ==========================================
+  sonarr:
+    image: linuxserver/sonarr:latest
+    container_name: sonarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./config/sonarr:/config
+      - ${MEDIA_PATH}:/media
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sonarr.rule=Host(`sonarr.${DOMAINNAME}`)"
+      - "traefik.http.services.sonarr.loadbalancer.server.port=8989"
+
+  radarr:
+    image: linuxserver/radarr:latest
+    container_name: radarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./config/radarr:/config
+      - ${MEDIA_PATH}:/media
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.radarr.rule=Host(`radarr.${DOMAINNAME}`)"
+      - "traefik.http.services.radarr.loadbalancer.server.port=7878"
+
+  prowlarr:
+    image: linuxserver/prowlarr:latest
+    container_name: prowlarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - ./config/prowlarr:/config
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prowlarr.rule=Host(`prowlarr.${DOMAINNAME}`)"
+      - "traefik.http.services.prowlarr.loadbalancer.server.port=9696"
+
+  bazarr:
+    image: linuxserver/bazarr:latest
+    container_name: bazarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - ./config/bazarr:/config
+      - ${MEDIA_PATH}:/media
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.bazarr.rule=Host(`bazarr.${DOMAINNAME}`)"
+      - "traefik.http.services.bazarr.loadbalancer.server.port=6767"
+
+  lidarr:
+    image: linuxserver/lidarr:latest
+    container_name: lidarr
+    environment:
+      - PUID=${PUID}
+      - PGID=${PGID}
+    volumes:
+      - ./config/lidarr:/config
+      - ${MEDIA_PATH}:/media
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.lidarr.rule=Host(`lidarr.${DOMAINNAME}`)"
+      - "traefik.http.services.lidarr.loadbalancer.server.port=8686"
+
+  flaresolverr:
+    image: flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.flaresolverr.rule=Host(`flaresolverr.${DOMAINNAME}`)"
+      - "traefik.http.services.flaresolverr.loadbalancer.server.port=8191"
+
+# ==========================================
+# STACK 5: STREAMING & DEBRID (RIVEN)
+# ==========================================
+  # UNIFIED STREAMING BACKEND
+  riven:
+    image: spoked/riven:latest
+    container_name: riven
+    restart: unless-stopped
+    environment:
+      - RIVEN_DATABASE_HOST=postgresql+psycopg2://postgres:postgres@riven-db/riven
+      - RIVEN_DOWNLOADERS_REAL_DEBRID_ENABLED=true
+      - RIVEN_UPDATERS_PLEX_ENABLED=true
+    volumes:
+      - ./config/riven:/riven/data
+      - ${MEDIA_PATH}:/mnt
+    depends_on:
+      - riven-db
+
+  riven-frontend:
+    image: spoked/riven-frontend:latest
+    container_name: riven-frontend
+    ports:
+      - 3010:3000
+    depends_on:
+      - riven
+
+  riven-db:
+    image: postgres:16-alpine
+    container_name: riven-db
+    environment:
+      POSTGRES_DB: riven
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PG_PASS}
+    volumes:
+      - riven_db_data:/var/lib/postgresql/data
+
+  # DEBRID CONTENT SCRAPER
+  zilean:
+    image: ipromknight/zilean:latest
+    container_name: zilean
+    restart: unless-stopped
+    ports:
+      - "8181:8181"
+    environment:
+      Zilean__Database__ConnectionString: "Host=riven-db;Port=5432;Database=zilean;Username=postgres;Password=${PG_PASS}"
+    depends_on:
+      - riven-db
+
+  # AIOStreams ADDON (Stremio Addon that links multiple addons and services under one powerful Addon) 
+  aiostreams:
+    image: ghcr.io/viren070/aiostreams:latest
+    container_name: aiostreams
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.aiostreams.rule=Host(`stream.${DOMAINNAME}`)"
+      - "traefik.http.services.aiostreams.loadbalancer.server.port=3000"
+
+  # MEDIA SERVER
+  plex:
+    image: plexinc/pms-docker:latest
+    container_name: plex
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - TZ=${TIMEZONE}
+      - PLEX_CLAIM=${PLEX_CLAIM}
+    volumes:
+      - ./config/plex:/config
+      - ${MEDIA_PATH}:/media
+    devices:
+      - "/dev/dri:/dev/dri"
+
+  # REQUEST MANAGEMENT
+  overseerr:
+    image: lscr.io/linuxserver/overseerr:latest
+    container_name: overseerr
+    environment:
+      - TZ=${TIMEZONE}
+    volumes:
+      - ./config/overseerr:/config
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.overseerr.rule=Host(`requests.${DOMAINNAME}`)"
+      - "traefik.http.services.overseerr.loadbalancer.server.port=5055"
+
+# ==========================================
+# STACK 6: IOT & HOME AUTOMATION
+# ==========================================
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    network_mode: host
+    privileged: true
+    volumes:
+      - ./config/homeassistant:/config
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.homeassistant.rule=Host(`homeassistant.${DOMAINNAME}`)"
+      - "traefik.http.services.homeassistant.loadbalancer.server.port=8123"
+
+  scrypted:
+    image: koush/scrypted
+    container_name: scrypted
+    network_mode: host
+    volumes:
+      - ./config/scrypted:/server/volume
+    environment:
+      - SCRYPTED_WEBHOOK_AUTH_SECRET=${SCRYPTED_SECRET}
+
+  homebridge:
+    image: homebridge/homebridge:latest
+    container_name: homebridge
+    network_mode: host
+    volumes:
+      - ./config/homebridge:/homebridge
+
+# ==========================================
+# STACK 7: UTILITIES & DATABASES
+# ==========================================
+  postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${PG_PASS}
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_DB: ${PG_DB}
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+
+  bitmagnet:
+    image: ghcr.io/bitmagnet-io/bitmagnet:latest
+    restart: unless-stopped
+    ports:
+      - "3333:3333"
+    environment:
+      - POSTGRES_HOST=postgresql
+      - POSTGRES_PASSWORD=${PG_PASS}
+    depends_on:
+      - postgresql
+
+  crosswatch:
+    image: ghcr.io/cenodude/crosswatch:latest
+    container_name: crosswatch
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.crosswatch.rule=Host(`crosswatch.${DOMAINNAME}`)"
+      - "traefik.http.services.crosswatch.loadbalancer.server.port=8787"
+
+  decypharr:
+    image: cy01/blackhole:latest
+    container_name: decypharr
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.decypharr.rule=Host(`decypharr.${DOMAINNAME}`)"
+      - "traefik.http.services.decypharr.loadbalancer.server.port=8282"
+
+  usenetstreamer:
+    image: ghcr.io/sanket9225/usenetstreamer:dev
+    container_name: usenetstreamer
+    ports:
+      - "7000:7000"
+    volumes:
+      - ./config/usenetstreamer:/app/data
+
+# ==========================================
+# VOLUMES
+# ==========================================
+volumes:
+  portainer_data:
+  postgres_data:
+  redis_data:
+  riven_db_data:
